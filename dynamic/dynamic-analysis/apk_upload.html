@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TraceGuard AI - APK Analysis</title>
+<style>
+  body {
+    background: #030712;
+    color: #f3f4f6;
+    font-family: 'Courier New', monospace, system-ui;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 3rem 1rem;
+    min-height: 100vh;
+    margin: 0;
+  }
+
+  h1 {
+    color: #00f0ff;
+    margin-bottom: 0.5rem;
+  }
+
+  p.subtitle {
+    color: #9ca3af;
+    margin-bottom: 2rem;
+  }
+
+  #drop-zone {
+    width: 100%;
+    max-width: 500px;
+    border: 2px dashed rgba(255,255,255,0.25);
+    border-radius: 10px;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  #drop-zone.drag-over {
+    border-color: #00f0ff;
+    background: rgba(0,240,255,0.06);
+  }
+
+  #drop-zone p {
+    color: #9ca3af;
+    margin: 0;
+  }
+
+  #file-input {
+    display: none;
+  }
+
+  #status {
+    margin-top: 1.5rem;
+    font-size: 0.9rem;
+    color: #00f0ff;
+    min-height: 1.2rem;
+  }
+
+  #result {
+    width: 100%;
+    max-width: 700px;
+    margin-top: 2rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(0,240,255,0.14);
+    border-radius: 8px;
+    padding: 1.5rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    display: none;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+
+  <h1>TraceGuard AI</h1>
+  <p class="subtitle">Drop an APK to run static + dynamic analysis</p>
+
+  <div id="drop-zone">
+    <p id="drop-text">Drag &amp; drop an APK here, or click to browse</p>
+    <input type="file" id="file-input" accept=".apk">
+  </div>
+
+  <div id="status"></div>
+  <pre id="result"></pre>
+
+<script>
+  const SERVER = "http://localhost:5000";
+
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+  const dropText = document.getElementById("drop-text");
+  const statusEl = document.getElementById("status");
+  const resultEl = document.getElementById("result");
+
+  dropZone.addEventListener("click", () => fileInput.click());
+
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("drag-over");
+  });
+
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+  });
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) uploadFile(file);
+  });
+
+  async function uploadFile(file) {
+    dropText.textContent = `📎 ${file.name}`;
+    resultEl.style.display = "none";
+    statusEl.textContent = "Uploading...";
+
+    const formData = new FormData();
+    formData.append("apk", file);
+
+    try {
+      const res = await fetch(`${SERVER}/api/analyze`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error("Upload failed");
+
+      const data = await res.json();
+      statusEl.textContent = `Queued (position ${data.queue_position}). Waiting for emulator...`;
+
+      pollStatus(data.job_id);
+
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function pollStatus(jobId) {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${SERVER}/api/status/${jobId}`);
+        const job = await res.json();
+
+        if (job.status === "queued") {
+          statusEl.textContent = "Queued...";
+        } else if (job.status === "running") {
+          statusEl.textContent = "Booting emulator and analyzing... (this can take 1-3 minutes)";
+        } else if (job.status === "done") {
+          clearInterval(interval);
+          statusEl.textContent = "✅ Analysis complete";
+          resultEl.style.display = "block";
+          resultEl.textContent = JSON.stringify(job.result, null, 2);
+        } else if (job.status === "error") {
+          clearInterval(interval);
+          statusEl.textContent = "❌ Analysis failed";
+          resultEl.style.display = "block";
+          resultEl.textContent = job.error;
+        }
+      } catch (err) {
+        clearInterval(interval);
+        statusEl.textContent = `Error: ${err.message}`;
+      }
+    }, 3000);
+  }
+</script>
+
+</body>
+</html>

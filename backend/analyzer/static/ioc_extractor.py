@@ -72,6 +72,12 @@ class IOCExtractor:
             r'app[_-]?id)\s*[=:]\s*["\']([^"\']+)["\']',
             re.IGNORECASE
         ),
+        "discord_webhook": re.compile(
+            r'https://discord\.com/api/webhooks/\d+/[A-Za-z0-9_-]+'
+        ),
+        "telegram_token": re.compile(
+            r'\b\d{8,11}:[A-Za-z0-9_-]{35}\b'
+        ),
 
         # Financial Indicators
         # NOTE: Bitcoin regex is intentionally broad; real validation
@@ -84,6 +90,12 @@ class IOCExtractor:
         ),
         "crypto_monero": re.compile(
             r'\b4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}\b'
+        ),
+        "crypto_solana": re.compile(
+            r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b'
+        ),
+        "crypto_tron": re.compile(
+            r'\bT[A-Za-z1-9]{33}\b'
         ),
 
         # Personal Data Indicators
@@ -150,9 +162,13 @@ class IOCExtractor:
         "google_api_key":       ("Google API Credential",   "HIGH"),
         "aws_access_key":       ("AWS Credential",          "CRITICAL"),
         "firebase_key":         ("Firebase Backend",        "HIGH"),
+        "discord_webhook":     ("Discord Webhook Link",    "CRITICAL"),
+        "telegram_token":      ("Telegram Bot Token",      "CRITICAL"),
         "crypto_bitcoin":       ("Crypto Wallet (BTC)",     "CRITICAL"),
         "crypto_ethereum":      ("Crypto Wallet (ETH)",     "CRITICAL"),
         "crypto_monero":        ("Crypto Wallet (XMR)",     "CRITICAL"),
+        "crypto_solana":        ("Crypto Wallet (SOL)",     "CRITICAL"),
+        "crypto_tron":          ("Crypto Wallet (TRX)",     "CRITICAL"),
         "email_address":        ("Developer/Contact Email", "HIGH"),
         "phone_number":         ("Contact Number",          "MEDIUM"),
         "indian_mobile":        ("Indian Mobile Number",    "HIGH"),
@@ -331,11 +347,11 @@ class IOCExtractor:
                 "ioc_types_found": list(sorted_iocs.keys()),
                 "has_c2_indicators": any(
                     k in iocs for k in
-                    ["ipv4_address", "websocket_url", "onion_address", "c2_port"]
+                    ["ipv4_address", "websocket_url", "onion_address", "c2_port", "discord_webhook", "telegram_token"]
                 ),
                 "has_financial_indicators": any(
                     k in iocs for k in
-                    ["crypto_bitcoin", "crypto_ethereum", "crypto_monero"]
+                    ["crypto_bitcoin", "crypto_ethereum", "crypto_monero", "crypto_solana", "crypto_tron"]
                 ),
             }
         }

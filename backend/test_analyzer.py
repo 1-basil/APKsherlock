@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+# ─── Load .env into os.environ ────────────────────────────────
+from dotenv import load_dotenv
+load_dotenv()
+
 # ─── Add backend to path ─────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,7 +48,7 @@ def print_finding(severity: str, message: str):
     icon = icons.get(severity, f"[{severity}]")
     print(f"    {icon} {message}")
 
-def run_full_analysis(apk_path: str):
+def run_full_analysis(apk_path: str, static_only: bool = False):
     """
     Complete forensic analysis pipeline
     Tests every module and shows detailed output
@@ -184,19 +188,20 @@ def run_full_analysis(apk_path: str):
         from analyzer.static.jadx_extractor import JadxExtractor
         extractor = JadxExtractor(apk_path, output_dir)
         java_files = extractor.decompile()
-        
+
         print_finding("INFO", f"Extracted Java files : {len(java_files)}")
         if java_files:
             print_subsection("Sample Java Files (first 3)")
             for i, p in enumerate(list(java_files.keys())[:3]):
                 print(f"    ☕ {p}")
-                
+
         results['decompiled'] = {'java_files': java_files}
         print("\n  ✅ Module 2.5 PASSED")
-        
+
     except Exception as e:
         print(f"  ❌ Module 2.5 FAILED: {e}")
         print("  ⚠️ Proceeding without decompiled Java source code.")
+        results.setdefault('decompiled', {'java_files': {}})
 
     # ══════════════════════════════════════════════════════════
     # MODULE 3: Androguard - Core APK Analysis
@@ -261,7 +266,7 @@ def run_full_analysis(apk_path: str):
                 fixed_path = apk_path.replace('.apk', '_fixed.apk')
                 extract_dir = apk_path + "_extracted"
                 os.makedirs(extract_dir, exist_ok=True)
-                
+
                 with zipfile.ZipFile(apk_path, 'r') as z:
                     for item in z.infolist():
                         try:
@@ -272,39 +277,45 @@ def run_full_analysis(apk_path: str):
                                 f.write(data)
                         except Exception:
                             pass
-                            
+
                 with zipfile.ZipFile(fixed_path, 'w', zipfile.ZIP_DEFLATED) as zout:
                     for root, dirs, files in os.walk(extract_dir):
                         for file in files:
                             full_path = os.path.join(root, file)
                             arcname = os.path.relpath(full_path, extract_dir)
                             zout.write(full_path, arcname)
-                            
+
                 shutil.rmtree(extract_dir)
                 print("  [*] Repack successful. Retrying Androguard...")
-                
+
                 a, d, dx = AnalyzeAPK(fixed_path)
-                
-                apk_name = a.get_app_name()
+                apk_obj = a
+                dx_obj  = dx
+
+                apk_name_val = a.get_app_name()
                 package_name = a.get_package()
                 results['apk_metadata'] = {
-                    'app_name':     apk_name,
+                    'app_name':     apk_name_val,
                     'package_name': package_name,
                     'version_name': a.get_androidversion_name(),
                     'version_code': a.get_androidversion_code(),
                     'min_sdk':      a.get_min_sdk_version(),
                     'target_sdk':   a.get_target_sdk_version(),
-                    'permissions':  a.get_permissions()
+                    'permissions':  list(a.get_permissions()),
+                    'activities':   list(a.get_activities()),
+                    'services':     list(a.get_services()),
+                    'receivers':    list(a.get_receivers()),
+                    'providers':    list(a.get_providers()),
                 }
-                
-                print_finding("INFO", f"App Name     : {apk_name}")
+
+                print_finding("INFO", f"App Name     : {apk_name_val}")
                 print_finding("INFO", f"Package      : {package_name}")
                 print_finding("INFO", f"Version      : {a.get_androidversion_name()} ({a.get_androidversion_code()})")
                 print("\n  ✅ Module 3 PASSED (via repacking)")
-                
+
                 # Keep fixed_path for Module 5 & 7
                 apk_path = fixed_path
-                
+
             except Exception as repack_e:
                 print(f"  ❌ Repack failed: {repack_e}")
                 print("  ⚠️ On Windows, Androguard can be tricky. Ensure you ran: pip install -r requirements.txt")
@@ -425,6 +436,7 @@ def run_full_analysis(apk_path: str):
         raw_strings = _extract_raw_strings(apk_path)
         string_blob = "\n".join(raw_strings)
         if string_blob:
+            java_files = dict(java_files)
             java_files["__strings_dump__"] = string_blob
 
         ioc_extractor = IOCExtractor(java_files)
@@ -562,6 +574,7 @@ def run_full_analysis(apk_path: str):
         raw_strings = _extract_raw_strings(apk_path)
         string_blob = "\n".join(raw_strings)
         if string_blob:
+            java_files = dict(java_files)
             java_files["__strings_dump__"] = string_blob
 
         if java_files:
@@ -614,6 +627,7 @@ def run_full_analysis(apk_path: str):
     except Exception as e:
         print(f"  ❌ Module 8 FAILED: {e}")
         import traceback; traceback.print_exc()
+
     # ══════════════════════════════════════════════════════════
     # MODULE 8B: NESTED APK / DROPPER DETECTION
     # ══════════════════════════════════════════════════════════
@@ -628,7 +642,7 @@ def run_full_analysis(apk_path: str):
         dropper = nested_result.get('dropper_indicators', {})
 
         print_finding("INFO",
-            f"Hidden payloads found    : {nested_result['total_hidden_payloads']}")
+            f"Hidden payloads found    : {nested_result.get('total_hidden_payloads', 0)}")
         print_finding("INFO",
             f"Dropper code patterns    : {len(nested_result.get('code_patterns', []))}")
         print_finding("INFO",
@@ -637,7 +651,7 @@ def run_full_analysis(apk_path: str):
             f"Dropper confidence       : {dropper.get('dropper_confidence', 0)}%")
 
         if dropper.get('dropper_confidence', 0) >= 40:
-            print_finding("CRITICAL", f"⚠️  DROPPER MALWARE CONFIRMED")
+            print_finding("CRITICAL", "⚠️  DROPPER MALWARE CONFIRMED")
             print(f"\n    {dropper.get('explanation', '')}\n")
 
         # Show each found payload
@@ -669,7 +683,7 @@ def run_full_analysis(apk_path: str):
 
             if analysis.get('type') == 'NESTED_APK':
                 print(f"\n    {'─'*50}")
-                print(f"    📱 NESTED APK CONTENTS:")
+                print("    📱 NESTED APK CONTENTS:")
                 print(f"    {'─'*50}")
                 print_finding("INFO",
                     f"Valid APK     : {analysis.get('is_valid_zip')}")
@@ -685,7 +699,7 @@ def run_full_analysis(apk_path: str):
                 # Nested package info
                 ag_meta = analysis.get('androguard_meta')
                 if ag_meta:
-                    print(f"\n    📋 NESTED APK METADATA:")
+                    print("\n    📋 NESTED APK METADATA:")
                     print_finding("CRITICAL",
                         f"Package  : {ag_meta.get('package_name')}")
                     print_finding("INFO",
@@ -745,7 +759,7 @@ def run_full_analysis(apk_path: str):
 
         if packer_result.get('is_packed'):
             packers = packer_result.get('detected_packers', [])
-            print_finding("CRITICAL", f"⚠️  COMMERCIAL/MALWARE PACKER DETECTED")
+            print_finding("CRITICAL", "⚠️  COMMERCIAL/MALWARE PACKER DETECTED")
             for p in packers:
                 print(f"             → {p}")
         else:
@@ -757,20 +771,24 @@ def run_full_analysis(apk_path: str):
             for b in blobs:
                 print_subsection(f"BLOB: {b.get('path')}")
                 print_finding("INFO", f"Size    : {b.get('size_kb')} KB")
-                print_finding("WARN" if b.get('entropy') > 7.8 else "INFO", f"Entropy : {b.get('entropy')} (Encrypted/Compressed)")
-                
+                entropy_val = b.get('entropy', 0) or 0
+                print_finding("WARN" if entropy_val > 7.8 else "INFO", f"Entropy : {entropy_val} (Encrypted/Compressed)")
+
                 hits = b.get('xor_header_hits', [])
                 if hits:
-                    print_finding("CRITICAL", f"⚠️ XOR Brute-Force Successful!")
+                    print_finding("CRITICAL", "⚠️ XOR Brute-Force Successful!")
                     for hit in hits:
                         print(f"             → Key: {hit['key_hex']} reveals {hit['revealed_type']}")
-        
+
         results['packer_analysis'] = packer_result
         print("\n  ✅ Module 8C PASSED")
 
     except Exception as e:
         print(f"  ❌ Module 8C FAILED: {e}")
         import traceback; traceback.print_exc()
+
+    if static_only:
+        return results
 
     # ══════════════════════════════════════════════════════════
     # MODULE 9: VirusTotal Check
@@ -816,12 +834,13 @@ def run_full_analysis(apk_path: str):
     try:
         from analyzer.dynamic.dynamic_engine import DynamicEngine
         pkg_name = results.get('apk_metadata', {}).get('package_name', 'unknown')
-        
+
         dynamic_engine = DynamicEngine(apk_path=apk_path, package_name=pkg_name, duration=15)
-        
+
         if dynamic_engine.check_environment():
-            dyn_result = dynamic_engine.run_analysis()
-            
+            static_iocs = results.get('iocs', {})
+            dyn_result = dynamic_engine.run_analysis(static_iocs=static_iocs)
+
             traffic = dyn_result.get('network_traffic', {})
             if 'error' in traffic:
                 print(f"  ⚠️  Dynamic capture error: {traffic['error']}")
@@ -830,32 +849,48 @@ def run_full_analysis(apk_path: str):
                 print_finding("INFO", f"Captured packets : {summary.get('total_packets', 0)}")
                 print_finding("INFO", f"Unique IPs       : {summary.get('unique_ips_count', 0)}")
                 print_finding("INFO", f"DNS Queries      : {summary.get('dns_query_count', 0)}")
-                
+
                 dns = traffic.get('dns_queries', [])
                 if dns:
                     print_finding("HIGH", f"DNS Beacons detected ({len(dns)}):")
                     for d in dns[:5]:
                         print(f"             → {d}")
-                        
+
             results['dynamic_analysis'] = dyn_result
-            
+
+            frida_res = dyn_result.get('frida_events', {})
+            if frida_res.get('status') == 'SUCCESS':
+                events = frida_res.get('events', [])
+                print_finding("HIGH", f"Frida intercepted {len(events)} events!")
+                for event in events[:5]:  # Show up to 5 events
+                    if event.get('type') == 'NETWORK_URL':
+                        print(f"             → [URL] {event.get('data')}")
+                    elif event.get('type') == 'DYNAMIC_DEX_LOAD':
+                        print(f"             → [DEX] {event.get('path')}")
+                    elif event.get('type') == 'NATIVE_LIBRARY_LOAD':
+                        print(f"             → [LIB] {event.get('data')}")
+                    elif event.get('type') == 'CRYPTO_OPERATION':
+                        print(f"             → [CRYPTO] {event.get('algo')}")
+            elif frida_res.get('status') == 'FAILED':
+                print(f"  ⚠️  Frida capture error: {frida_res.get('error')}")
+
             # ────────────────────────────────────────────────────────
             # DYNAMIC METADATA FALLBACK
             # ────────────────────────────────────────────────────────
-            # If Androguard failed on a packed APK, we can restore the 
+            # If Androguard failed on a packed APK, we can restore the
             # package name, version, and permissions from the OS itself.
             dyn_meta = dyn_result.get('dynamic_metadata', {})
             if dyn_meta and (not results.get('apk_metadata') or results.get('apk_metadata', {}).get('package_name') == 'unknown'):
                 print("  [+] Applying dynamic metadata fallback...")
-                
+
                 if 'apk_metadata' not in results:
                     results['apk_metadata'] = {}
-                
+
                 results['apk_metadata']['package_name'] = dyn_meta.get('package_name', 'Unknown')
                 results['apk_metadata']['version_name'] = dyn_meta.get('version_name', 'Unknown')
                 results['apk_metadata']['version_code'] = dyn_meta.get('version_code', 'Unknown')
-                results['apk_metadata']['app_name']     = dyn_meta.get('package_name', 'Unknown') # Fallback app name to pkg
-                
+                results['apk_metadata']['app_name']     = dyn_meta.get('package_name', 'Unknown')  # Fallback app name to pkg
+
                 # Restore permissions
                 req_perms = dyn_meta.get('requested_permissions', [])
                 if req_perms:
@@ -864,15 +899,15 @@ def run_full_analysis(apk_path: str):
                         results['permissions'] = {
                             "total": len(req_perms),
                             "dangerous": [p for p in req_perms if "android.permission." in p],
-                            "risk_percentage": 50, # Arbitrary risk if we don't have Androguard's deep analysis
+                            "risk_percentage": 50,  # Arbitrary risk if we don't have Androguard's deep analysis
                             "grade": "MEDIUM",
                             "dangerous_combinations": []
                         }
-                        
+
             print("\n  ✅ Module 10 PASSED")
         else:
             print("  ⚠️  Skipped - No Emulator/Device connected via ADB")
-            
+
     except Exception as e:
         print(f"  ❌ Module 10 FAILED: {e}")
         import traceback; traceback.print_exc()
@@ -882,111 +917,116 @@ def run_full_analysis(apk_path: str):
     # ══════════════════════════════════════════════════════════
     print_section("MODULE 11: THREAT SCORING & INVESTIGATION SUMMARY")
 
-    threat_score  = 0
+    threat_score   = 0
     threat_factors = []
 
-    # Score from permissions
-    perm_risk = results.get('permissions', {}).get('risk_percentage', 0)
-    threat_score += perm_risk * 0.3
-    if perm_risk > 60:
-        threat_factors.append(f"High-risk permissions ({perm_risk}% risk score)")
+    try:
+        # Score from permissions
+        perm_risk = results.get('permissions', {}).get('risk_percentage', 0) or 0
+        threat_score += perm_risk * 0.3
+        if perm_risk > 60:
+            threat_factors.append(f"High-risk permissions ({perm_risk}% risk score)")
 
-    # Score from dangerous combos
-    combos = results.get('permissions', {}).get('dangerous_combinations', [])
-    threat_score += len(combos) * 15
-    for c in combos:
-        threat_factors.append(f"Dangerous permission combo: {c['name']}")
+        # Score from dangerous combos
+        combos = results.get('permissions', {}).get('dangerous_combinations', [])
+        threat_score += len(combos) * 15
+        for c in combos:
+            threat_factors.append(f"Dangerous permission combo: {c['name']}")
 
-    # Score from code analysis
-    code_risk = results.get('code_analysis', {}).get('code_risk_score', 0)
-    threat_score += code_risk * 0.3
-    caps = results.get('code_analysis', {}).get('capabilities', [])
-    for cap in caps:
-        if cap.get('risk') == 'CRITICAL':
-            threat_score  += 20
-            threat_factors.append(f"Critical code capability: {cap['capability']}")
-
-    # Score from IOCs
-    ioc_summary = results.get('iocs', {}).get('summary', {})
-    if ioc_summary.get('has_c2_indicators'):
-        threat_score  += 25
-        threat_factors.append("C2 communication indicators found")
-    if ioc_summary.get('has_financial_indicators'):
-        threat_score  += 30
-        threat_factors.append("Financial crime indicators (crypto wallets)")
-    threat_score += ioc_summary.get('critical_count', 0) * 3
-
-    # Score from Dynamic Analysis
-    dyn_res = results.get('dynamic_analysis', {}).get('network_traffic', {})
-    if dyn_res and 'error' not in dyn_res:
-        dns_queries = dyn_res.get('dns_queries', [])
-        unique_ips = dyn_res.get('unique_ips', [])
-        if dns_queries or unique_ips:
-            threat_score += 25
-            threat_factors.append(f"Dynamic C2 Beacons Detected ({len(dns_queries)} DNS, {len(unique_ips)} IPs)")
-
-    # Score from Nested APK / Droppers
-    nested_res = results.get('nested_analysis', {})
-    if nested_res:
-        dropper = nested_res.get('dropper_indicators', {})
-        dropper_conf = dropper.get('dropper_confidence', 0)
-        threat_score += dropper_conf * 0.5
-        if dropper_conf >= 40:
-            threat_factors.append(f"Confirmed Dropper Behavior ({dropper_conf}% confidence)")
-        for payload in nested_res.get('payloads', []):
-            if payload.get('is_disguised'):
-                threat_score += 15
-                threat_factors.append(f"Disguised hidden payload detected: {payload.get('source_path')}")
-
-    # Score from Packer Analysis
-    packer_res = results.get('packer_analysis', {})
-    if packer_res:
-        if packer_res.get('is_packed'):
-            threat_score += 40
-            packers_list = ", ".join(packer_res.get('detected_packers', []))
-            threat_factors.append(f"App is packed/protected with: {packers_list}")
-            
-        blobs = packer_res.get('encrypted_blobs', [])
-        for b in blobs:
-            threat_score += 10
-            threat_factors.append(f"Highly-entropic encrypted blob detected: {b.get('path')} ({b.get('size_kb')} KB)")
-            if b.get('xor_header_hits'):
+        # Score from code analysis
+        code_risk = results.get('code_analysis', {}).get('code_risk_score', 0) or 0
+        threat_score += code_risk * 0.3
+        caps = results.get('code_analysis', {}).get('capabilities', [])
+        for cap in caps:
+            if cap.get('risk') == 'CRITICAL':
                 threat_score += 20
-                threat_factors.append(f"XOR-obfuscated executable header found in {b.get('path')}!")
+                threat_factors.append(f"Critical code capability: {cap['capability']}")
 
-    # Score from VirusTotal
-    vt_res = results.get('virustotal', {})
-    if vt_res:
-        positives = vt_res.get('positives', 0)
-        if positives > 0:
-            # 10 points per engine detection, capped at 60 points max
-            threat_score += min(positives * 10, 60)
-            threat_factors.append(f"VirusTotal detected malware ({positives}/{vt_res.get('total', 0)} engines)")
+        # Score from IOCs
+        ioc_summary = results.get('iocs', {}).get('summary', {})
+        if ioc_summary.get('has_c2_indicators'):
+            threat_score += 25
+            threat_factors.append("C2 communication indicators found")
+        if ioc_summary.get('has_financial_indicators'):
+            threat_score += 30
+            threat_factors.append("Financial crime indicators (crypto wallets)")
+        threat_score += ioc_summary.get('critical_count', 0) * 3
+
+        # Score from Dynamic Analysis
+        dyn_res = results.get('dynamic_analysis', {}).get('network_traffic', {})
+        if dyn_res and 'error' not in dyn_res:
+            dns_queries = dyn_res.get('dns_queries', [])
+            unique_ips = dyn_res.get('unique_ips', [])
+            if dns_queries or unique_ips:
+                threat_score += 25
+                threat_factors.append(f"Dynamic C2 Beacons Detected ({len(dns_queries)} DNS, {len(unique_ips)} IPs)")
+
+        # Score from Nested APK / Droppers
+        nested_res = results.get('nested_analysis', {})
+        if nested_res:
+            dropper = nested_res.get('dropper_indicators', {})
+            dropper_conf = dropper.get('dropper_confidence', 0) or 0
+            threat_score += dropper_conf * 0.5
+            if dropper_conf >= 40:
+                threat_factors.append(f"Confirmed Dropper Behavior ({dropper_conf}% confidence)")
+            for payload in nested_res.get('payloads', []):
+                if payload.get('is_disguised'):
+                    threat_score += 15
+                    threat_factors.append(f"Disguised hidden payload detected: {payload.get('source_path')}")
+
+        # Score from Packer Analysis
+        packer_res = results.get('packer_analysis', {})
+        if packer_res:
+            if packer_res.get('is_packed'):
+                threat_score += 40
+                packers_list = ", ".join(packer_res.get('detected_packers', []))
+                threat_factors.append(f"App is packed/protected with: {packers_list}")
+
+            blobs = packer_res.get('encrypted_blobs', [])
+            for b in blobs:
+                threat_score += 10
+                threat_factors.append(f"Highly-entropic encrypted blob detected: {b.get('path')} ({b.get('size_kb')} KB)")
+                if b.get('xor_header_hits'):
+                    threat_score += 20
+                    threat_factors.append(f"XOR-obfuscated executable header found in {b.get('path')}!")
+
+        # Score from VirusTotal
+        vt_res = results.get('virustotal', {})
+        if vt_res:
+            positives = vt_res.get('positives', 0)
+            if positives > 0:
+                # 10 points per engine detection, capped at 60 points max
+                threat_score += min(positives * 10, 60)
+                threat_factors.append(f"VirusTotal detected malware ({positives}/{vt_res.get('total', 0)} engines)")
+
+    except Exception as e:
+        print(f"  ⚠️  Threat scoring encountered an issue: {e}")
+        import traceback; traceback.print_exc()
 
     # Cap at 100
     threat_score = min(int(threat_score), 100)
 
     # Grade
     if threat_score >= 80:
-        grade       = "CRITICAL"
-        grade_icon  = "🔴"
-        verdict     = "HIGH PROBABILITY MALWARE / MALICIOUS APP"
+        grade      = "CRITICAL"
+        grade_icon = "🔴"
+        verdict    = "HIGH PROBABILITY MALWARE / MALICIOUS APP"
     elif threat_score >= 60:
-        grade       = "HIGH"
-        grade_icon  = "🟠"
-        verdict     = "SUSPICIOUS - LIKELY MALICIOUS"
+        grade      = "HIGH"
+        grade_icon = "🟠"
+        verdict    = "SUSPICIOUS - LIKELY MALICIOUS"
     elif threat_score >= 40:
-        grade       = "MEDIUM"
-        grade_icon  = "🟡"
-        verdict     = "POTENTIALLY UNWANTED APPLICATION"
+        grade      = "MEDIUM"
+        grade_icon = "🟡"
+        verdict    = "POTENTIALLY UNWANTED APPLICATION"
     elif threat_score >= 20:
-        grade       = "LOW"
-        grade_icon  = "🟢"
-        verdict     = "LOW RISK - MONITOR"
+        grade      = "LOW"
+        grade_icon = "🟢"
+        verdict    = "LOW RISK - MONITOR"
     else:
-        grade       = "CLEAN"
-        grade_icon  = "✅"
-        verdict     = "LIKELY LEGITIMATE"
+        grade      = "CLEAN"
+        grade_icon = "✅"
+        verdict    = "LIKELY LEGITIMATE"
 
     print(f"\n  {'─'*60}")
     print(f"  {grade_icon} THREAT SCORE : {threat_score}/100")
@@ -1001,12 +1041,14 @@ def run_full_analysis(apk_path: str):
     else:
         print("    No significant risk factors detected")
 
-    apk_meta = results.get('apk_metadata', {})
+    apk_meta  = results.get('apk_metadata', {})
     cert_data = results.get('certificate', {})
     if cert_data and cert_data.get('certificates'):
         subject = cert_data['certificates'][0].get('subject', {})
     else:
         subject = {}
+
+    ioc_summary = results.get('iocs', {}).get('summary', {})
 
     print_subsection("INVESTIGATION SUMMARY")
     print(f"""
@@ -1025,46 +1067,115 @@ def run_full_analysis(apk_path: str):
     # ══════════════════════════════════════════════════════════
     # MODULE 12: AI THREAT ANALYSIS (OPTIONAL)
     # ══════════════════════════════════════════════════════════
-    print_section("MODULE 12: AI THREAT ANALYSIS (GEMINI / OPENAI)")
+    # NOTE: This module was previously crashing / stalling the whole
+    # pipeline on OpenRouter 402 "insufficient credits" errors, because
+    # those errors were raised deep inside the agent's ReAct loop and
+    # were never caught by a try/except at this level (or were being
+    # retried indefinitely). Everything here is now defensive:
+    #   - a hard wall-clock timeout so a bad agent loop can't hang forever
+    #   - explicit handling for HTTP 402 / credit errors
+    #   - explicit handling for rate limits / timeouts / malformed JSON
+    #   - the module NEVER raises past this block; it always degrades
+    #     gracefully and lets Module 13 (save) run.
+    print_section("MODULE 12: AGENTIC AI THREAT ANALYSIS (GEMINI ReAct)")
+
+    AI_MODULE_TIMEOUT_SECONDS = 120  # hard ceiling so a stuck agent loop can't hang the whole run
+
+    def _run_ai_analysis():
+        """Isolated so we can wrap it with a timeout without touching the
+        rest of the pipeline's control flow."""
+        from intelligence.agentic_analyzer import AgenticAnalyzer
+        ai_analyzer = AgenticAnalyzer()
+
+        if not ai_analyzer.is_ready:
+            return {"_skipped": True}
+
+        print("  [*] Launching Autonomous Agent to investigate static findings...")
+        jadx_dir      = os.path.join(output_dir, "jadx_source")
+        extracted_dir = os.path.join(output_dir, "nested_apks")
+        return ai_analyzer.analyze_report(results, apk_path, jadx_dir, extracted_dir)
+
     try:
-        from intelligence.ai_analyzer import AIAnalyzer
-        ai_analyzer = AIAnalyzer()
-        
-        if ai_analyzer.client:
-            print("  [*] Sending forensic JSON data to AI for orchestration...")
-            ai_report = ai_analyzer.analyze_report(results)
-            
-            if "error" in ai_report:
-                print(f"  ❌ AI Analysis Failed: {ai_report['error']}")
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_run_ai_analysis)
+            try:
+                ai_report = future.result(timeout=AI_MODULE_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError:
+                print(f"  ⚠️  AI Analysis timed out after {AI_MODULE_TIMEOUT_SECONDS}s — skipping.")
+                print("  ⚠️  This usually means the agent loop is stuck retrying a failing API call")
+                print("      (e.g. repeated 402 'insufficient credits' from OpenRouter).")
+                ai_report = {"_skipped": True, "_reason": "timeout"}
+
+        if ai_report.get("_skipped"):
+            if ai_report.get("_reason") == "timeout":
+                pass  # already printed above
             else:
-                print("\n  🧠 AI VERDICT             :", ai_report.get('verdict'))
-                print(f"  🧠 AI THREAT SCORE          : {ai_report.get('threat_score_override')}/100")
-                print(f"  🧠 MALWARE FAMILY HYPOTHESIS: {ai_report.get('malware_family_hypothesis')}\n")
-                
-                print_subsection("Executive Summary (AI Generated)")
-                print(f"    {ai_report.get('executive_summary', '')}\n")
-                
-                print_subsection("Key AI Findings")
-                for kf in ai_report.get('key_findings', []):
-                    print(f"    → {kf}")
-                
-                print_subsection("MITRE ATT&CK Tactics")
-                for tactic in ai_report.get('mitre_attck_tactics', []):
-                    print(f"    → {tactic}")
-
-                # Override Threat Score with AI's contextual score if present
-                if isinstance(ai_report.get('threat_score_override'), int):
-                    threat_score = ai_report['threat_score_override']
-                    
-                results['ai_analysis'] = ai_report
-                print("\n  ✅ Module 11 PASSED")
+                print("  ⚠️  Skipped - No GEMINI_API_KEY / OpenRouter key configured, or agent not ready.")
+                print("  To enable, run: $env:GEMINI_API_KEY='your_api_key'")
+        elif isinstance(ai_report, dict) and "error" in ai_report:
+            err_text = str(ai_report.get("error", ""))
+            if "402" in err_text or "credits" in err_text.lower():
+                print("  ❌ AI Analysis Failed: OpenRouter account is out of credits.")
+                print("     Add credits at https://openrouter.ai/settings/credits, or reduce")
+                print("     max_tokens requested by the agent, then re-run this module.")
+            elif "429" in err_text or "rate limit" in err_text.lower():
+                print("  ❌ AI Analysis Failed: Rate limited by the model provider.")
+                print("     Wait a bit and re-run, or reduce request concurrency.")
+            else:
+                print(f"  ❌ AI Analysis Failed: {err_text}")
+            results['ai_analysis'] = {"error": err_text}
         else:
-            print("  ⚠️  Skipped - No GEMINI_API_KEY environment variable found.")
-            print("  To enable, run: $env:GEMINI_API_KEY='your_api_key'")
+            print("\n  🧠 AI VERDICT               :", ai_report.get('verdict'))
+            print(f"  🧠 AI THREAT SCORE          : {ai_report.get('threat_score_override')}/100")
+            print(f"  🧠 MALWARE FAMILY HYPOTHESIS: {ai_report.get('malware_family_hypothesis')}\n")
 
+            print_subsection("Executive Summary (AI Generated)")
+            print(f"    {ai_report.get('executive_summary', '')}\n")
+
+            print_subsection("Key AI Findings")
+            findings = ai_report.get('key_findings', {})
+            if isinstance(findings, dict):
+                for k, v in findings.items():
+                    print(f"    → {k}: {v}")
+            elif isinstance(findings, list):
+                for kf in findings:
+                    if isinstance(kf, dict):
+                        for k, v in kf.items():
+                            print(f"    → {k}: {v}")
+                    else:
+                        print(f"    → {kf}")
+            else:
+                print(f"    → {findings}")
+
+            print_subsection("MITRE ATT&CK Tactics/Techniques")
+            tactics = ai_report.get('mitre_attck_tactics', [])
+            if isinstance(tactics, dict):
+                for k, v in tactics.items():
+                    print(f"    → {k}: {v}")
+            elif isinstance(tactics, list):
+                for tactic in tactics:
+                    print(f"    → {tactic}")
+            else:
+                print(f"    → {tactics}")
+
+            # Override Threat Score with AI's contextual score if present
+            override = ai_report.get('threat_score_override')
+            if isinstance(override, int):
+                threat_score = override
+
+            results['ai_analysis'] = ai_report
+            print("\n  ✅ Module 12 PASSED")
+
+    except ImportError as e:
+        print(f"  ⚠️  Skipped - agentic_analyzer module not available: {e}")
     except Exception as e:
-        print(f"  ❌ Module 11 FAILED: {e}")
+        # Absolute last-resort net: whatever goes wrong in AI analysis,
+        # it must never take down the rest of the report.
+        print(f"  ❌ Module 12 FAILED (non-fatal, continuing): {e}")
         import traceback; traceback.print_exc()
+        results['ai_analysis'] = {"error": str(e)}
 
     # ══════════════════════════════════════════════════════════
     # SAVE FULL REPORT AS JSON
@@ -1091,11 +1202,14 @@ def run_full_analysis(apk_path: str):
         return str(obj)
 
     report_path = os.path.join(output_dir, "forensic_report.json")
-    with open(report_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, default=clean_for_json, ensure_ascii=False)
-
-    print_finding("OK",   f"JSON report saved: {report_path}")
-    print_finding("INFO", f"Report size: {os.path.getsize(report_path) / 1024:.1f} KB")
+    try:
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, default=clean_for_json, ensure_ascii=False)
+        print_finding("OK",   f"JSON report saved: {report_path}")
+        print_finding("INFO", f"Report size: {os.path.getsize(report_path) / 1024:.1f} KB")
+    except Exception as e:
+        print(f"  ❌ Failed to save JSON report: {e}")
+        import traceback; traceback.print_exc()
 
     print_section("ANALYSIS COMPLETE")
     print(f"""

@@ -1,6 +1,6 @@
 # backend/analyzer/static/certificate_analyzer.py
 
-from androguard.core.bytecodes.apk import APK
+from androguard.core.apk import APK
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
@@ -127,7 +127,6 @@ class CertificateAnalyzer:
             return "App uses a self-signed certificate. Examine the subject and issuer fields for possible clues."
         else:
             return "App uses a custom certificate. Check validity and developer details."
-
     def _extract_attribution(self, cert_analyses: list) -> list:
         """Extract possible clues for developer attribution"""
         clues = []
@@ -136,4 +135,7 @@ class CertificateAnalyzer:
             for key, val in subject.items():
                 if val:
                     clues.append(f"{key}: {val}")
+                    # Heuristic for packer randomized certs (e.g. 7ZA6JD)
+                    if key in ("common_name", "organization") and len(val) == 6 and val.isalnum() and val.isupper():
+                        clues.append(f"⚠️ HIGH RISK: {key} '{val}' appears to be a randomized string often used by Chinese packers (NP Manager/NagaPak).")
         return clues

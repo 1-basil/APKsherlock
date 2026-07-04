@@ -2,6 +2,10 @@ import os
 import json
 import traceback
 import time
+from dotenv import load_dotenv
+
+# Load .env so GEMINI_API_KEY is available via os.environ
+load_dotenv()
 
 class AIAnalyzer:
     def __init__(self, api_key: str = None):

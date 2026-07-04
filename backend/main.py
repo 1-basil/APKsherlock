@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
 
 from config import settings
 
@@ -22,9 +23,27 @@ import uuid
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-# In-memory store for task results (for prototype)
+# Persistent store for task results to survive server restarts/reloads
 # Maps task_id -> {"status": "pending" | "running" | "completed" | "failed", "result": dict, "error": str}
-tasks_db = {}
+DB_FILE = os.path.join(settings.REPORTS_DIR, "tasks_db.json")
+
+def load_db() -> dict:
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_db(db: dict):
+    try:
+        os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+        with open(DB_FILE, "w") as f:
+            json.dump(db, f, indent=2)
+    except:
+        pass
+
 executor = ThreadPoolExecutor(max_workers=4)
 
 def run_analysis_sync(apk_path: str, task_id: str):
@@ -33,9 +52,13 @@ def run_analysis_sync(apk_path: str, task_id: str):
     from test_analyzer import run_full_analysis
     try:
         results = run_full_analysis(apk_path)
-        tasks_db[task_id] = {"status": "completed", "result": results}
+        db = load_db()
+        db[task_id] = {"status": "completed", "result": results}
+        save_db(db)
     except Exception as e:
-        tasks_db[task_id] = {"status": "failed", "error": str(e)}
+        db = load_db()
+        db[task_id] = {"status": "failed", "error": str(e)}
+        save_db(db)
 
 @app.post("/upload")
 async def upload_apk(file: UploadFile = File(...)):
@@ -47,7 +70,9 @@ async def upload_apk(file: UploadFile = File(...)):
         buffer.write(content)
         
     task_id = str(uuid.uuid4())
-    tasks_db[task_id] = {"status": "running"}
+    db = load_db()
+    db[task_id] = {"status": "running"}
+    save_db(db)
     
     # Run the blocking analysis in a threadpool so we don't block the FastAPI event loop
     asyncio.get_running_loop().run_in_executor(executor, run_analysis_sync, file_path, task_id)
@@ -56,6 +81,7 @@ async def upload_apk(file: UploadFile = File(...)):
 
 @app.get("/status/{task_id}")
 async def get_status(task_id: str):
-    if task_id not in tasks_db:
+    db = load_db()
+    if task_id not in db:
         return {"error": "Task not found", "status": "failed"}
-    return tasks_db[task_id]
+    return db[task_id]

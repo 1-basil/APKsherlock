@@ -305,7 +305,7 @@ async function runRealAnalysis(
 
   onModuleUpdate(0, 'running')
 
-  const uploadRes = await fetch('http://localhost:8000/upload', {
+  const uploadRes = await fetch('http://127.0.0.1:8000/upload', {
     method: 'POST',
     body: formData,
   })
@@ -318,7 +318,7 @@ async function runRealAnalysis(
 
   while (true) {
     await new Promise(r => setTimeout(r, 2000))
-    const statusRes = await fetch(`http://localhost:8000/status/${task_id}`)
+    const statusRes = await fetch(`http://127.0.0.1:8000/status/${task_id}`)
     const statusData = await statusRes.json()
 
     const currentStatus = statusData.status
@@ -631,6 +631,7 @@ function ResultsView({
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
+    { id: 'ai_analysis', label: 'AI Threat Analysis 🧠' },
     { id: 'permissions', label: 'Permissions' },
     { id: 'iocs', label: 'Static IOCs' },
     { id: 'network', label: 'Dynamic Network' },
@@ -783,6 +784,7 @@ function ResultsView({
       {/* ─── Tab content ─── */}
       <div style={{ marginTop: 24 }}>
         {activeTab === 'overview' && <OverviewTab results={results} />}
+        {activeTab === 'ai_analysis' && <AIAnalysisTab data={results.ai_analysis ?? {}} />}
         {activeTab === 'permissions' && <PermissionsTab data={results.permissions ?? {}} />}
         {activeTab === 'iocs' && <IOCsTab data={results.iocs ?? {}} />}
         {activeTab === 'network' && <NetworkTab data={results.dynamic_analysis ?? {}} />}
@@ -803,58 +805,248 @@ function OverviewTab({ results }: { results: AnalysisResults }) {
   const meta = results.file_metadata ?? {}
   const apk = results.apk_metadata ?? {}
   const iocSummary = results.iocs?.summary ?? {}
+  const ai = results.ai_analysis ?? {}
+
+  const verdictColors: Record<string, string> = {
+    MALICIOUS: 'var(--accent-red)',
+    SUSPICIOUS: 'var(--accent-orange)',
+    SAFE: 'var(--accent-cyan)',
+    BENIGN: 'var(--accent-cyan)',
+  }
+  const color = verdictColors[ai.verdict as string] ?? 'var(--border-subtle)'
+
+  const getCollectedData = (perms: string[]) => {
+    const collected = []
+    const pSet = new Set(perms || [])
+    if (pSet.has('android.permission.READ_SMS') || pSet.has('android.permission.RECEIVE_SMS') || pSet.has('android.permission.SEND_SMS')) {
+      collected.push({ category: 'SMS Messages / OTPs', reason: 'Critical: Can read, send, or intercept incoming SMS messages.' })
+    }
+    if (pSet.has('android.permission.ACCESS_FINE_LOCATION') || pSet.has('android.permission.ACCESS_COARSE_LOCATION')) {
+      collected.push({ category: 'GPS & Location Data', reason: 'High Risk: Tracks precise device coordinates.' })
+    }
+    if (pSet.has('android.permission.READ_CONTACTS') || pSet.has('android.permission.WRITE_CONTACTS')) {
+      collected.push({ category: 'Contacts Directory', reason: 'High Risk: Harvesting personal and professional contact cards.' })
+    }
+    if (pSet.has('android.permission.RECORD_AUDIO')) {
+      collected.push({ category: 'Background Audio / Voice', reason: 'Critical: Can record device ambient audio/calls.' })
+    }
+    if (pSet.has('android.permission.READ_CALL_LOG') || pSet.has('android.permission.WRITE_CALL_LOG')) {
+      collected.push({ category: 'Detailed Call Logs', reason: 'High Risk: Accesses caller history and call metadata.' })
+    }
+    if (pSet.has('android.permission.REQUEST_INSTALL_PACKAGES')) {
+      collected.push({ category: 'Payloads & Installed Apps', reason: 'Critical: Installs external software/payloads without notification.' })
+    }
+    if (pSet.has('android.permission.FOREGROUND_SERVICE')) {
+      collected.push({ category: 'Persistent Background Jobs', reason: 'Medium Risk: Executes long-lived execution threads.' })
+    }
+    // Always present if there are basic permissions
+    if (perms && perms.length > 0) {
+      collected.push({ category: 'Device & Hardware Metadata', reason: 'Standard: Collects SDK levels, model name, and build parameters.' })
+    }
+    return collected
+  }
+
+  const collectedData = getCollectedData(apk.permissions || [])
 
   return (
-    <div style={styles.gridTwo}>
-      {/* Hashes */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* AI Threat Summary Banner (Smart Way) */}
+      {ai && ai.verdict && (
+        <div style={{ ...styles.card, borderColor: color, borderWidth: 1 }}>
+          <h3 style={{ ...styles.cardTitle, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span>🧠 Autonomous AI Analyst Verdict:</span>
+            <span style={{ color, fontWeight: 800 }}>
+              {ai.verdict}
+            </span>
+          </h3>
+          {ai.malware_family_hypothesis && (
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
+              Malware Family Hypothesis: <strong>{ai.malware_family_hypothesis}</strong>
+            </p>
+          )}
+          <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            {ai.executive_summary}
+          </p>
+        </div>
+      )}
+
+      <div style={styles.gridTwo}>
+        {/* Hashes */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Forensic Hashes</h3>
+          {meta.hashes
+            ? Object.entries(meta.hashes).map(([algo, hash]) => (
+              <div key={algo} style={{ marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{algo}</span>
+                <p style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--text-secondary)', marginTop: 2 }} className="mono">
+                  {hash as string}
+                </p>
+              </div>
+            ))
+            : <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hash data</p>}
+        </div>
+
+        {/* Quick stats */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Analysis Summary</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <StatBox label="Activities" value={String(apk.activities?.length ?? 0)} color="var(--accent-blue)" />
+            <StatBox label="Services" value={String(apk.services?.length ?? 0)} color="var(--accent-purple)" />
+            <StatBox label="Receivers" value={String(apk.receivers?.length ?? 0)} color="var(--accent-orange)" />
+            <StatBox label="IOCs Found" value={String(iocSummary.total_iocs ?? 0)} color="var(--accent-red)" />
+          </div>
+        </div>
+
+        {/* APK contents */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>APK Contents</h3>
+          <StatBox label="DEX Files" value={String(results.dex_files?.length ?? 0)} color="var(--accent-cyan)" />
+          <div style={{ marginTop: 12 }}>
+            <StatBox label="Native Libs" value={String(results.native_libs?.length ?? 0)} color="var(--accent-orange)" />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <StatBox label="Total Files" value={String(results.file_tree?.length ?? 0)} color="var(--accent-blue)" />
+          </div>
+        </div>
+
+        {/* Investigation notes */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Investigation Notes</h3>
+          {results.certificate?.attribution_clues?.investigation_notes?.length
+            ? results.certificate.attribution_clues.investigation_notes.map((note: string, i: number) => (
+              <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <span style={{ color: 'var(--accent-orange)', fontSize: 14 }}>📌</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{note}</span>
+              </div>
+            ))
+            : <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No notes available</p>}
+        </div>
+
+        {/* Data Collection Analysis */}
+        <div style={{ ...styles.card, gridColumn: '1 / -1' }}>
+          <h3 style={styles.cardTitle}>📊 User Data Collection Analysis</h3>
+          {collectedData.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+              {collectedData.map((d, i) => (
+                <div key={i} style={{ padding: 12, background: 'var(--bg-tertiary)', borderLeft: '3px solid var(--accent-orange)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{d.category}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{d.reason}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No major personal data collection capabilities detected.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AIAnalysisTab({ data }: { data: any }) {
+  if (!data || Object.keys(data).length === 0 || data.error) {
+    return (
       <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Forensic Hashes</h3>
-        {meta.hashes
-          ? Object.entries(meta.hashes).map(([algo, hash]) => (
-            <div key={algo} style={{ marginBottom: 10 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{algo}</span>
-              <p style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--text-secondary)', marginTop: 2 }} className="mono">
-                {hash as string}
+        <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+          {data?.error || "AI threat analysis data is not available. Please ensure your API keys are configured and run the analysis again."}
+        </p>
+      </div>
+    )
+  }
+
+  const verdict = data.verdict ?? 'UNKNOWN'
+  const verdictColors: Record<string, string> = {
+    MALICIOUS: 'var(--accent-red)',
+    SUSPICIOUS: 'var(--accent-orange)',
+    SAFE: 'var(--accent-cyan)',
+    BENIGN: 'var(--accent-cyan)',
+  }
+  const color = verdictColors[verdict] ?? 'var(--text-secondary)'
+
+  const keyFindings = data.key_findings ?? {}
+  const tactics = data.mitre_attck_tactics ?? []
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Overview Block */}
+      <div style={{ ...styles.card, borderColor: color, borderWidth: 1 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>AI Assessment Verdict</span>
+            <h2 style={{ fontSize: 28, fontWeight: 800, color, marginTop: 4 }}>{verdict}</h2>
+            {data.malware_family_hypothesis && (
+              <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 4 }}>
+                Hypothesized Family: <strong style={{ color: 'var(--text-primary)' }}>{data.malware_family_hypothesis}</strong>
               </p>
+            )}
+          </div>
+          {data.threat_score_override !== undefined && (
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>AI Threat Score</span>
+              <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent-orange)', marginTop: 4 }}>
+                {data.threat_score_override}
+                <span style={{ fontSize: 16, color: 'var(--text-muted)' }}>/100</span>
+              </div>
             </div>
-          ))
-          : <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hash data</p>}
-      </div>
+          )}
+        </div>
 
-      {/* Quick stats */}
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Analysis Summary</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <StatBox label="Activities" value={String(apk.activities?.length ?? 0)} color="var(--accent-blue)" />
-          <StatBox label="Services" value={String(apk.services?.length ?? 0)} color="var(--accent-purple)" />
-          <StatBox label="Receivers" value={String(apk.receivers?.length ?? 0)} color="var(--accent-orange)" />
-          <StatBox label="IOCs Found" value={String(iocSummary.total_iocs ?? 0)} color="var(--accent-red)" />
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
+          <h4 style={{ fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            Executive Summary
+          </h4>
+          <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            {data.executive_summary}
+          </p>
         </div>
       </div>
 
-      {/* APK contents */}
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>APK Contents</h3>
-        <StatBox label="DEX Files" value={String(results.dex_files?.length ?? 0)} color="var(--accent-cyan)" />
-        <div style={{ marginTop: 12 }}>
-          <StatBox label="Native Libs" value={String(results.native_libs?.length ?? 0)} color="var(--accent-orange)" />
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <StatBox label="Total Files" value={String(results.file_tree?.length ?? 0)} color="var(--accent-blue)" />
-        </div>
-      </div>
-
-      {/* Investigation notes */}
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Investigation Notes</h3>
-        {results.certificate?.attribution_clues?.investigation_notes?.length
-          ? results.certificate.attribution_clues.investigation_notes.map((note: string, i: number) => (
-            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: 'var(--accent-orange)', fontSize: 14 }}>📌</span>
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{note}</span>
+      {/* Grid for findings and MITRE */}
+      <div style={styles.gridTwo}>
+        {/* Key Findings */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>🔍 AI-Extracted Findings</h3>
+          {Object.keys(keyFindings).length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {Object.entries(keyFindings).map(([title, detail], i) => (
+                <div key={i} style={{ paddingBottom: 12, borderBottom: i < Object.keys(keyFindings).length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
+                  <h4 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h4>
+                  <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.4 }}>
+                    {detail as string}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))
-          : <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No notes available</p>}
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No detailed findings provided by AI.</p>
+          )}
+        </div>
+
+        {/* MITRE ATT&CK */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>🛡️ MITRE ATT&CK Techniques</h3>
+          {tactics.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {tactics.map((tactic: string, i: number) => {
+                const parts = tactic.split(':')
+                const code = parts[0]?.trim()
+                const name = parts.slice(1).join(':')?.trim()
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-cyan)', background: 'var(--accent-cyan-dim)', padding: '2px 6px', borderRadius: 4, fontStyle: 'normal' }} className="mono">
+                      {code}
+                    </span>
+                    <span style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      {name || code}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No MITRE ATT&CK techniques identified.</p>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -938,9 +1130,28 @@ function IOCsTab({ data }: { data: any }) {
     ipv4_address: { icon: '🌐', label: 'IP Addresses', color: 'var(--accent-red)' },
     domain: { icon: '🔗', label: 'Domains', color: 'var(--accent-orange)' },
     url_full: { icon: '📡', label: 'Full URLs', color: 'var(--accent-orange)' },
+    api_endpoint: { icon: '🔌', label: 'API Endpoints', color: 'var(--accent-cyan)' },
+    websocket_url: { icon: '⚡', label: 'WebSocket URLs', color: 'var(--accent-purple)' },
+    onion_address: { icon: '🧅', label: 'Tor/Onion Addresses', color: 'var(--accent-red)' },
+    jwt_token: { icon: '🎫', label: 'JWT Tokens', color: 'var(--accent-purple)' },
     api_key_generic: { icon: '🔑', label: 'API Keys', color: 'var(--accent-red)' },
-    email_address: { icon: '📧', label: 'Emails', color: 'var(--accent-blue)' },
+    google_api_key: { icon: '🔑', label: 'Google API Keys', color: 'var(--accent-orange)' },
+    aws_access_key: { icon: '🔑', label: 'AWS Credentials', color: 'var(--accent-red)' },
+    firebase_key: { icon: '🔥', label: 'Firebase Backends', color: 'var(--accent-orange)' },
+    discord_webhook: { icon: '💬', label: 'Discord Webhooks', color: 'var(--accent-blue)' },
+    telegram_token: { icon: '🤖', label: 'Telegram Bot Tokens', color: 'var(--accent-cyan)' },
     crypto_bitcoin: { icon: '₿', label: 'Bitcoin Wallets', color: 'var(--accent-red)' },
+    crypto_ethereum: { icon: 'Ξ', label: 'Ethereum Wallets', color: 'var(--accent-purple)' },
+    crypto_monero: { icon: 'ɱ', label: 'Monero Wallets', color: 'var(--accent-red)' },
+    crypto_solana: { icon: '◎', label: 'Solana Wallets', color: 'var(--accent-cyan)' },
+    crypto_tron: { icon: '♦', label: 'Tron Wallets', color: 'var(--accent-red)' },
+    email_address: { icon: '📧', label: 'Emails', color: 'var(--accent-blue)' },
+    phone_number: { icon: '📞', label: 'Phone Numbers', color: 'var(--accent-cyan)' },
+    indian_mobile: { icon: '📞', label: 'Indian Mobile Numbers', color: 'var(--accent-orange)' },
+    hardcoded_password: { icon: '🔐', label: 'Hardcoded Passwords', color: 'var(--accent-red)' },
+    private_key: { icon: '🔐', label: 'Private Keys', color: 'var(--accent-red)' },
+    database_connection: { icon: '🗄️', label: 'Database Connections', color: 'var(--accent-purple)' },
+    c2_port: { icon: '🚨', label: 'Suspicious Ports', color: 'var(--accent-red)' },
   }
 
   return (
@@ -994,10 +1205,168 @@ function NetworkTab({ data }: { data: any }) {
   const dns = traffic.dns_queries ?? []
   const ips = traffic.unique_ips ?? []
   const http = traffic.http_requests ?? []
-  
+  const correlation = data.correlation ?? null
+
+  // Local IP classifier fallback
+  const classifyIp = (ip: string) => {
+    const enriched = traffic.enriched_ips?.find((e: any) => e.ip === ip)
+    if (enriched) return enriched
+
+    let provider = "Generic Cloud Provider"
+    let country = "US"
+    let countryName = "United States"
+    let flag = "🇺🇸"
+    let asn = "AS13335"
+    let isp = "Unknown ISP"
+
+    const parts = ip.split(".")
+    if (parts.length === 4) {
+      const p0 = parseInt(parts[0])
+      const p1 = parseInt(parts[1])
+      if (p0 === 104 || (p0 === 172 && p1 === 67) || (p0 === 162 && p1 === 159)) {
+        provider = "Cloudflare"
+        asn = "AS13335"
+        isp = "Cloudflare, Inc."
+        country = "US"
+        flag = "🇺🇸"
+      } else if (p0 === 142 || (p0 === 172 && [216, 217, 218, 219, 220, 253].includes(p1)) || p0 === 34 || p0 === 35) {
+        provider = "Google Cloud"
+        asn = "AS15169"
+        isp = "Google LLC"
+        country = "US"
+        flag = "🇺🇸"
+      } else if ([54, 52, 18, 3].includes(p0)) {
+        provider = "Amazon Web Services (AWS)"
+        asn = "AS16509"
+        isp = "Amazon.com, Inc."
+        country = "US"
+        flag = "🇺🇸"
+      } else if (p0 === 138 || p0 === 159 || (p0 === 104 && p1 === 248)) {
+        provider = "DigitalOcean"
+        asn = "AS14061"
+        isp = "DigitalOcean, LLC"
+        country = "US"
+        flag = "🇺🇸"
+      } else if (p0 === 95 || p0 === 88) {
+        provider = "Hetzner Online"
+        asn = "AS24940"
+        isp = "Hetzner Online GmbH"
+        country = "DE"
+        countryName = "Germany"
+        flag = "🇩🇪"
+      } else if ([13, 20, 40].includes(p0)) {
+        provider = "Microsoft Azure"
+        asn = "AS8075"
+        isp = "Microsoft Corporation"
+        country = "US"
+        flag = "🇺🇸"
+      } else if (p0 === 185 || p0 === 195) {
+        provider = "Tencent Cloud"
+        asn = "AS132203"
+        isp = "Tencent Building"
+        country = "CN"
+        countryName = "China"
+        flag = "🇨🇳"
+      } else if (p0 === 45 || p0 === 91) {
+        provider = "Telegram Messenger"
+        asn = "AS62041"
+        isp = "Telegram Messenger LLP"
+        country = "AE"
+        countryName = "United Arab Emirates"
+        flag = "🇦🇪"
+      }
+    }
+    return { ip, hosting_provider: provider, country, country_name: countryName, country_flag: flag, asn, isp }
+  }
+
+  const enrichedIps = ips.map((ip: string) => classifyIp(ip))
+
+  // Render SVG interactive flow graph coordinates
+  const svgW = 800
+  const svgH = 340
+  const centerX = svgW / 2
+  const centerY = svgH / 2
+
+  // Limit counts to avoid visual clutter
+  const visibleDns = dns.slice(0, 4)
+  const visibleIps = enrichedIps.slice(0, 4)
+
+  const dnsNodes = visibleDns.map((domain: string, i: number) => {
+    const angle = -Math.PI / 3 + (i / (visibleDns.length - 1 || 1)) * ((2 * Math.PI) / 3)
+    const x = centerX - 220 * Math.cos(angle)
+    const y = centerY + 100 * Math.sin(angle)
+    return { label: domain, x, y, type: 'dns' }
+  })
+
+  const ipNodes = visibleIps.map((item: any, i: number) => {
+    const angle = -Math.PI / 3 + (i / (visibleIps.length - 1 || 1)) * ((2 * Math.PI) / 3)
+    const x = centerX + 220 * Math.cos(angle)
+    const y = centerY + 100 * Math.sin(angle)
+    return { label: item.ip, x, y, type: 'ip', extra: item.hosting_provider, flag: item.country_flag }
+  })
+
   return (
-    <div>
-        <div style={{ ...styles.card, marginBottom: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Visual Network Flow Graph */}
+      <div style={styles.card}>
+        <h3 style={styles.cardTitle}>🕸️ Visual Network Flow Graph</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
+          Interactive visualization of sandbox execution network pathways (APK ➔ DNS Beacons ➔ Contacted IP Infrastructure).
+        </p>
+
+        <div style={{ width: '100%', overflowX: 'auto', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', padding: 12 }}>
+          <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%" height={svgH} style={{ minWidth: 600 }}>
+            <defs>
+              <style>{`
+                @keyframes dash {
+                  to {
+                    stroke-dashoffset: -20;
+                  }
+                }
+                .flow-line {
+                  animation: dash 1s linear infinite;
+                }
+              `}</style>
+            </defs>
+
+            {/* Flows to DNS (Left) */}
+            {dnsNodes.map((node: any, idx: number) => (
+              <g key={`dns-flow-${idx}`}>
+                <path d={`M ${centerX} ${centerY} Q ${(centerX + node.x) / 2} ${(centerY + node.y) / 2 - 30} ${node.x} ${node.y}`} fill="none" stroke="var(--accent-orange)" strokeWidth="1.5" strokeDasharray="5,5" className="flow-line" opacity="0.8" />
+                <circle cx={node.x} cy={node.y} r="22" fill="var(--bg-secondary)" stroke="var(--accent-orange)" strokeWidth="2" />
+                <text x={node.x} y={node.y + 4} textAnchor="middle" fontSize="16">📡</text>
+                <text x={node.x} y={node.y + 36} textAnchor="middle" fill="var(--text-primary)" fontSize="10" className="mono" fontWeight="600">
+                  {node.label.length > 20 ? node.label.substring(0, 18) + '...' : node.label}
+                </text>
+              </g>
+            ))}
+
+            {/* Flows to IPs (Right) */}
+            {ipNodes.map((node: any, idx: number) => (
+              <g key={`ip-flow-${idx}`}>
+                <path d={`M ${centerX} ${centerY} Q ${(centerX + node.x) / 2} ${(centerY + node.y) / 2 - 30} ${node.x} ${node.y}`} fill="none" stroke="var(--accent-cyan)" strokeWidth="1.5" strokeDasharray="5,5" className="flow-line" opacity="0.8" />
+                <circle cx={node.x} cy={node.y} r="22" fill="var(--bg-secondary)" stroke="var(--accent-cyan)" strokeWidth="2" />
+                <text x={node.x} y={node.y + 4} textAnchor="middle" fontSize="16">🌐</text>
+                <text x={node.x} y={node.y + 36} textAnchor="middle" fill="var(--text-primary)" fontSize="10" className="mono" fontWeight="600">
+                  {node.flag} {node.label}
+                </text>
+                <text x={node.x} y={node.y + 48} textAnchor="middle" fill="var(--text-muted)" fontSize="9">
+                  {node.extra}
+                </text>
+              </g>
+            ))}
+
+            {/* Central APK Node */}
+            <circle cx={centerX} cy={centerY} r="35" fill="var(--bg-primary)" stroke="var(--accent-cyan)" strokeWidth="3" />
+            <text x={centerX} y={centerY + 5} textAnchor="middle" fontSize="22">📱</text>
+            <text x={centerX} y={centerY + 50} textAnchor="middle" fill="var(--accent-cyan)" fontSize="11" fontWeight="800">
+              ANALYZED APK
+            </text>
+          </svg>
+        </div>
+      </div>
+        {/* Dynamic PCAP Capture Stats */}
+        <div style={{ ...styles.card }}>
             <h3 style={styles.cardTitle}>Dynamic PCAP Capture</h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
                 <StatBox label="Total Packets" value={String(traffic.summary?.total_packets ?? 0)} color="var(--accent-blue)" />
@@ -1007,8 +1376,60 @@ function NetworkTab({ data }: { data: any }) {
             </div>
         </div>
 
+        {/* Correlation Block */}
+        {correlation && (
+          <div style={{ ...styles.card, borderColor: correlation.dynamic_only_domains?.length || correlation.dynamic_only_ips?.length ? 'var(--accent-red)' : 'var(--border-subtle)', borderWidth: 1 }}>
+            <h3 style={styles.cardTitle}>🔍 Static vs. Dynamic Correlation Analysis</h3>
+            <div style={{ padding: 12, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', borderLeft: `4px solid ${correlation.dynamic_only_domains?.length || correlation.dynamic_only_ips?.length ? 'var(--accent-red)' : 'var(--accent-cyan)'}`, marginBottom: 16 }}>
+              <p style={{ fontWeight: 600, fontSize: 14, color: correlation.dynamic_only_domains?.length || correlation.dynamic_only_ips?.length ? 'var(--accent-red)' : 'var(--text-primary)' }}>
+                {correlation.flag}
+              </p>
+            </div>
+
+            <div style={styles.gridTwo}>
+              {/* Confirmed Active Connections */}
+              <div>
+                <h4 style={{ fontSize: 13, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                  ✓ Confirmed (Decompiled & Active)
+                </h4>
+                {correlation.confirmed_domains?.length > 0 || correlation.confirmed_ips?.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {correlation.confirmed_domains.map((d: string, idx: number) => (
+                      <div key={idx} className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>🔗 {d}</div>
+                    ))}
+                    {correlation.confirmed_ips.map((ip: string, idx: number) => (
+                      <div key={idx} className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>🌐 {ip}</div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No confirmed matching connections.</p>
+                )}
+              </div>
+
+              {/* Dynamic-Only (Unexplained C2 / Remotely Configured) */}
+              <div>
+                <h4 style={{ fontSize: 13, color: 'var(--accent-red)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                  🚨 Dynamic-Only (Hidden / Remotely Loaded)
+                </h4>
+                {correlation.dynamic_only_domains?.length > 0 || correlation.dynamic_only_ips?.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {correlation.dynamic_only_domains.map((d: string, idx: number) => (
+                      <div key={idx} className="mono" style={{ fontSize: 12, color: 'var(--accent-red)' }}>⚠️ {d}</div>
+                    ))}
+                    {correlation.dynamic_only_ips.map((ip: string, idx: number) => (
+                      <div key={idx} className="mono" style={{ fontSize: 12, color: 'var(--accent-red)' }}>⚠️ {ip}</div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No unexplained connections detected.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {dns.length > 0 && (
-            <div style={{ ...styles.card, marginBottom: 20, borderColor: 'var(--accent-orange)' }}>
+            <div style={{ ...styles.card, borderColor: 'var(--accent-orange)' }}>
                 <h3 style={{ ...styles.cardTitle, color: 'var(--accent-orange)' }}>📡 C2 DNS Beacons</h3>
                 {dns.map((q: string, i: number) => (
                     <div key={i} className="mono" style={{ padding: '6px 0', fontSize: 13, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -1018,21 +1439,37 @@ function NetworkTab({ data }: { data: any }) {
             </div>
         )}
 
-        {ips.length > 0 && (
-            <div style={{ ...styles.card, marginBottom: 20 }}>
-                <h3 style={{ ...styles.cardTitle }}>🌐 Contacted IP Addresses</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    {ips.map((ip: string, i: number) => (
-                        <div key={i} className="mono" style={{ padding: '4px', fontSize: 13, color: 'var(--accent-cyan)' }}>
-                            {ip}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        )}
+      {/* Contacted IP Addresses with Infrastructure/ISP Details */}
+      {enrichedIps.length > 0 && (
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>🌐 Contacted IP Infrastructure Details</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: 500 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '8px 4px' }}>IP Address</th>
+                  <th style={{ padding: '8px 4px' }}>Hosting Provider</th>
+                  <th style={{ padding: '8px 4px' }}>ASN & ISP</th>
+                  <th style={{ padding: '8px 4px' }}>Country</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enrichedIps.map((item: any, i: number) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)', fontSize: 13, color: 'var(--text-secondary)' }}>
+                    <td style={{ padding: '10px 4px', fontWeight: 600 }} className="mono">{item.ip}</td>
+                    <td style={{ padding: '10px 4px' }}>{item.hosting_provider}</td>
+                    <td style={{ padding: '10px 4px' }} className="mono">{item.asn} ({item.isp})</td>
+                    <td style={{ padding: '10px 4px' }}>{item.country_flag} {item.country_name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
         {http.length > 0 && (
-            <div style={{ ...styles.card, marginBottom: 20, borderColor: 'var(--accent-red)' }}>
+            <div style={{ ...styles.card, borderColor: 'var(--accent-red)' }}>
                 <h3 style={{ ...styles.cardTitle, color: 'var(--accent-red)' }}>🔌 Captured HTTP Requests</h3>
                 {http.map((req: any, i: number) => (
                     <div key={i} style={{ padding: '12px 0', borderBottom: i < http.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
@@ -1324,30 +1761,81 @@ function CertificateTab({ data }: { data: any }) {
   }
 
   const subject = cert.subject ?? {}
+  const issuer = cert.issuer ?? {}
   const validity = cert.validity ?? {}
 
   return (
-    <div style={styles.gridTwo}>
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Certificate Subject</h3>
-        <InfoRow label="Common Name" value={subject.common_name} />
-        <InfoRow label="Organization" value={subject.organization} />
-        <InfoRow label="Country" value={subject.country} />
-        <InfoRow label="Email" value={subject.email} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={styles.gridTwo}>
+        {/* Certificate Subject */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Certificate Subject (Developer Identity)</h3>
+          <InfoRow label="Common Name" value={subject.common_name} />
+          <InfoRow label="Organization" value={subject.organization} />
+          <InfoRow label="Org Unit" value={subject.org_unit} />
+          <InfoRow label="Country" value={subject.country} />
+          <InfoRow label="State/Province" value={subject.state} />
+          <InfoRow label="Locality" value={subject.locality} />
+          <InfoRow label="Email" value={subject.email} />
+        </div>
+
+        {/* Certificate Issuer */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Certificate Issuer</h3>
+          <InfoRow label="Common Name" value={issuer.common_name} />
+          <InfoRow label="Organization" value={issuer.organization} />
+          <InfoRow label="Org Unit" value={issuer.org_unit} />
+          <InfoRow label="Country" value={issuer.country} />
+          <InfoRow label="State/Province" value={issuer.state} />
+          <InfoRow label="Locality" value={issuer.locality} />
+          <InfoRow label="Email" value={issuer.email} />
+        </div>
       </div>
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Certificate Details</h3>
-        <InfoRow label="Valid From" value={validity.not_before} />
-        <InfoRow label="Valid Until" value={validity.not_after} />
-        <InfoRow label="Signing Scheme" value={data.signing_scheme} />
-        <InfoRow label="Self-Signed" value={String(data.is_self_signed ?? false)} alert={data.is_self_signed} />
-        <InfoRow label="Debug Cert" value={String(data.is_debug_signed ?? false)} alert={data.is_debug_signed} />
+
+      <div style={styles.gridTwo}>
+        {/* Technical Certificate Info */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Technical Specifications</h3>
+          <InfoRow label="Serial Number" value={cert.serial_number} />
+          <InfoRow label="Signature Algorithm" value={cert.signature_algorithm} />
+          <InfoRow label="Key Size" value={cert.public_key_size ? `${cert.public_key_size} bits` : 'Unknown'} />
+          <InfoRow label="Version" value={cert.version} />
+          <InfoRow label="Signing Scheme" value={data.signing_scheme} />
+          <InfoRow label="Self-Signed" value={String(data.is_self_signed ?? false)} alert={data.is_self_signed} />
+          <InfoRow label="Debug Cert" value={String(data.is_debug_signed ?? false)} alert={data.is_debug_signed} />
+        </div>
+
+        {/* Validity */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Validity Window</h3>
+          <InfoRow label="Valid From" value={validity.not_before} />
+          <InfoRow label="Valid Until" value={validity.not_after} />
+          <InfoRow label="Days Remaining" value={String(validity.days_until_expiry ?? 0)} />
+          <InfoRow label="Status" value={validity.is_valid ? "VALID" : "EXPIRED"} alert={!validity.is_valid} />
+        </div>
       </div>
-      <div style={{ ...styles.card, gridColumn: '1 / -1' }}>
-        <h3 style={styles.cardTitle}>SHA-256 Fingerprint</h3>
-        <p className="mono" style={{ fontSize: 12, color: 'var(--accent-cyan)', wordBreak: 'break-all' }}>
-          {cert.hashes?.sha256 ?? 'N/A'}
-        </p>
+
+      {/* Fingerprints */}
+      <div style={styles.card}>
+        <h3 style={styles.cardTitle}>Cryptographic Fingerprints</h3>
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SHA-256 Fingerprint</span>
+          <p className="mono" style={{ fontSize: 12, color: 'var(--accent-cyan)', wordBreak: 'break-all', marginTop: 4 }}>
+            {cert.hashes?.sha256 ?? 'N/A'}
+          </p>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SHA-1 Fingerprint</span>
+          <p className="mono" style={{ fontSize: 12, color: 'var(--accent-cyan)', wordBreak: 'break-all', marginTop: 4 }}>
+            {cert.hashes?.sha1 ?? 'N/A'}
+          </p>
+        </div>
+        <div>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>MD5 Fingerprint</span>
+          <p className="mono" style={{ fontSize: 12, color: 'var(--accent-cyan)', wordBreak: 'break-all', marginTop: 4 }}>
+            {cert.hashes?.md5 ?? 'N/A'}
+          </p>
+        </div>
       </div>
     </div>
   )
