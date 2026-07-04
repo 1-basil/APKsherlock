@@ -1,0 +1,6 @@
+FROM ubuntu:20.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y openjdk-11-jdk wget unzip cpu-checker qemu-kvm \
+    && apt-get clean
+# Placeholder for Android SDK and Emulator setup
+CMD ["echo", "Android Emulator Placeholder"]
