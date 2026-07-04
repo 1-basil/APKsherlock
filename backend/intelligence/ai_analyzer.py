@@ -73,12 +73,24 @@ Here is the raw forensic data:
                 )
                 
                 # Parse the JSON response
-                result_json = response.text
-                return json.loads(result_json)
+                result_json = response.text.strip()
+                if result_json.startswith('```json'):
+                    result_json = result_json[7:]
+                if result_json.startswith('```'):
+                    result_json = result_json[3:]
+                if result_json.endswith('```'):
+                    result_json = result_json[:-3]
                 
+                return json.loads(result_json.strip())
+                
+            except json.JSONDecodeError as e:
+                print(f"    [*] Gemini returned malformed JSON. Retrying... ({attempt+1}/{max_retries})")
+                if attempt == max_retries - 1:
+                    return {"error": f"LLM generated invalid JSON: {str(e)}"}
             except Exception as e:
                 if '429' in str(e) and attempt < max_retries - 1:
-                    wait = 60 * (attempt + 1)
+                    # Implement exponential backoff for 429 rate limit
+                    wait = (2 ** attempt) * 60  # 60s, 120s, 240s
                     print(f"    [*] Gemini Rate limited (429). Waiting {wait}s before retry...")
                     time.sleep(wait)
                 else:
@@ -106,6 +118,14 @@ Here is the raw forensic data:
         if 'network' in safe_data.get('iocs', {}):
             for net_type in ['urls', 'domains', 'ips']:
                 if net_type in safe_data['iocs']['network']:
-                    safe_data['iocs']['network'][net_type] = safe_data['iocs']['network'][net_type][:20]
+                    safe_data['iocs']['network'][net_type] = safe_data['iocs']['network'][net_type][:10]
+                    
+        # Severely truncate the static decompiled output
+        if 'decompiled' in safe_data:
+            safe_data['decompiled'] = "[TRUNCATED - Too large for AI context]"
+            
+        # Truncate strings output
+        if 'strings' in safe_data.get('iocs', {}):
+             safe_data['iocs']['strings'] = "[TRUNCATED - Too large for AI context]"
 
         return safe_data

@@ -290,8 +290,8 @@ def run_full_analysis(apk_path: str):
                 results['apk_metadata'] = {
                     'app_name':     apk_name,
                     'package_name': package_name,
-                    'version_name': a.get_version_name(),
-                    'version_code': a.get_version_code(),
+                    'version_name': a.get_androidversion_name(),
+                    'version_code': a.get_androidversion_code(),
                     'min_sdk':      a.get_min_sdk_version(),
                     'target_sdk':   a.get_target_sdk_version(),
                     'permissions':  a.get_permissions()
@@ -299,7 +299,7 @@ def run_full_analysis(apk_path: str):
                 
                 print_finding("INFO", f"App Name     : {apk_name}")
                 print_finding("INFO", f"Package      : {package_name}")
-                print_finding("INFO", f"Version      : {a.get_version_name()} ({a.get_version_code()})")
+                print_finding("INFO", f"Version      : {a.get_androidversion_name()} ({a.get_androidversion_code()})")
                 print("\n  ✅ Module 3 PASSED (via repacking)")
                 
                 # Keep fixed_path for Module 5 & 7
@@ -373,11 +373,11 @@ def run_full_analysis(apk_path: str):
                 subject = cert.get('subject', {})
 
                 print_finding("INFO",
-                    f"Developer   : {subject.get('common_name', 'Unknown')}")
+                    f"Subject CN  : {subject.get('common_name', 'Unknown')}")
                 print_finding("INFO",
-                    f"Org         : {subject.get('organization', 'Unknown')}")
+                    f"Subject O   : {subject.get('organization', 'Unknown')}")
                 print_finding("INFO",
-                    f"Country     : {subject.get('country', 'Unknown')}")
+                    f"Subject C   : {subject.get('country', 'Unknown')}")
                 print_finding("INFO",
                     f"Email       : {subject.get('email', 'Not found')}")
                 print_finding("INFO",
@@ -392,8 +392,7 @@ def run_full_analysis(apk_path: str):
                 sha256 = cert.get('hashes', {}).get('sha256', 'N/A')
                 print_finding("INFO", f"SHA256 FP   : {sha256}")
 
-                attr = cert_result.get('attribution_clues', {})
-                notes = attr.get('investigation_notes', [])
+                notes = cert_result.get('attribution_clues', [])
                 if notes:
                     print_subsection("Investigation Notes")
                     for note in notes:
@@ -839,6 +838,37 @@ def run_full_analysis(apk_path: str):
                         print(f"             → {d}")
                         
             results['dynamic_analysis'] = dyn_result
+            
+            # ────────────────────────────────────────────────────────
+            # DYNAMIC METADATA FALLBACK
+            # ────────────────────────────────────────────────────────
+            # If Androguard failed on a packed APK, we can restore the 
+            # package name, version, and permissions from the OS itself.
+            dyn_meta = dyn_result.get('dynamic_metadata', {})
+            if dyn_meta and (not results.get('apk_metadata') or results.get('apk_metadata', {}).get('package_name') == 'unknown'):
+                print("  [+] Applying dynamic metadata fallback...")
+                
+                if 'apk_metadata' not in results:
+                    results['apk_metadata'] = {}
+                
+                results['apk_metadata']['package_name'] = dyn_meta.get('package_name', 'Unknown')
+                results['apk_metadata']['version_name'] = dyn_meta.get('version_name', 'Unknown')
+                results['apk_metadata']['version_code'] = dyn_meta.get('version_code', 'Unknown')
+                results['apk_metadata']['app_name']     = dyn_meta.get('package_name', 'Unknown') # Fallback app name to pkg
+                
+                # Restore permissions
+                req_perms = dyn_meta.get('requested_permissions', [])
+                if req_perms:
+                    results['apk_metadata']['permissions'] = req_perms
+                    if 'permissions' not in results or results['permissions'].get('total', 0) == 0:
+                        results['permissions'] = {
+                            "total": len(req_perms),
+                            "dangerous": [p for p in req_perms if "android.permission." in p],
+                            "risk_percentage": 50, # Arbitrary risk if we don't have Androguard's deep analysis
+                            "grade": "MEDIUM",
+                            "dangerous_combinations": []
+                        }
+                        
             print("\n  ✅ Module 10 PASSED")
         else:
             print("  ⚠️  Skipped - No Emulator/Device connected via ADB")
@@ -973,16 +1003,20 @@ def run_full_analysis(apk_path: str):
 
     apk_meta = results.get('apk_metadata', {})
     cert_data = results.get('certificate', {})
-    attribution = cert_data.get('attribution_clues', {}) if cert_data else {}
+    if cert_data and cert_data.get('certificates'):
+        subject = cert_data['certificates'][0].get('subject', {})
+    else:
+        subject = {}
 
     print_subsection("INVESTIGATION SUMMARY")
     print(f"""
     App Name    : {apk_meta.get('app_name', 'N/A')}
     Package     : {apk_meta.get('package_name', 'N/A')}
     Version     : {apk_meta.get('version_name', 'N/A')}
-    Developer   : {attribution.get('developer_name', 'Unknown')}
-    Org         : {attribution.get('organization', 'Unknown')}
-    Country     : {attribution.get('country', 'Unknown')}
+    Cert Subject:
+      CN        : {subject.get('common_name', 'Unknown')}
+      O         : {subject.get('organization', 'Unknown')}
+      C         : {subject.get('country', 'Unknown')}
     Permissions : {len(apk_meta.get('permissions', []))} total
     IOCs Found  : {ioc_summary.get('total_iocs', 0)} artifacts
     Risk Score  : {threat_score}/100 ({grade})

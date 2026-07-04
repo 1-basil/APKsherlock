@@ -143,3 +143,33 @@ body::before {
 .mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
+
+/* ─── PDF Export Print Styles ─── */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  
+  /* Ensure backgrounds render in Chrome PDF export */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  
+  /* Hide the nav bar and tab bar for a clean report */
+  nav, .tab-bar-print-hide {
+    display: none !important;
+  }
+  
+  /* Reset some card styles for paper */
+  div[style*="var(--bg-card)"] {
+    background: #f8f9fa !important;
+    border: 1px solid #dee2e6 !important;
+    break-inside: avoid;
+  }
+}

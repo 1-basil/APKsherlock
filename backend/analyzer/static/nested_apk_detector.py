@@ -155,6 +155,7 @@ class NestedAPKDetector:
                         "is_disguised": self._is_disguised(
                                             info.filename, file_type
                                         ),
+                        "is_primary_payload": False
                     }
                     findings.append(finding)
                     print(f"    🔴 FOUND {file_type}: {info.filename} "

@@ -252,6 +252,22 @@ function generateMockResults(fileName: string, fileSize: number): AnalysisResult
             { source_path: 'assets/payload.blob', is_disguised: true, file_type: 'ENCRYPTED_ARCHIVE', size_kb: 3950.4 }
         ]
     },
+    dynamic_analysis: {
+        network_traffic: {
+            unique_ips: ['192.168.1.5', '185.20.14.88', '45.133.1.22'],
+            dns_queries: ['api.cerberus-update.ru', 'c2-server.malicious.net'],
+            http_requests: [
+                { request: 'POST /api/v1/bot/register HTTP/1.1', host: 'api.cerberus-update.ru' },
+                { request: 'GET /payload/stage2.apk HTTP/1.1', host: '45.133.1.22' }
+            ],
+            summary: {
+                total_packets: 4520,
+                unique_ips_count: 3,
+                dns_query_count: 2,
+                http_request_count: 2
+            }
+        }
+    },
     threat_assessment: {
       score: 73,
       grade: 'HIGH',
@@ -717,11 +733,38 @@ function ResultsView({
               </span>
             )}
           </div>
+
+          {/* Action Buttons */}
+          <div style={{ alignSelf: 'flex-start', marginLeft: 'auto' }} className="no-print">
+            <button
+               onClick={() => window.print()}
+               style={{
+                 background: 'var(--accent-cyan)',
+                 color: '#000',
+                 border: 'none',
+                 padding: '8px 16px',
+                 borderRadius: 4,
+                 fontWeight: 600,
+                 cursor: 'pointer',
+                 display: 'flex',
+                 alignItems: 'center',
+                 gap: 8,
+                 fontSize: 13
+               }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Export PDF Report
+            </button>
+          </div>
         </div>
       </div>
 
       {/* ─── Tabs ─── */}
-      <div style={styles.tabBar}>
+      <div style={styles.tabBar} className="tab-bar-print-hide">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -987,6 +1030,22 @@ function NetworkTab({ data }: { data: any }) {
                 </div>
             </div>
         )}
+
+        {http.length > 0 && (
+            <div style={{ ...styles.card, marginBottom: 20, borderColor: 'var(--accent-red)' }}>
+                <h3 style={{ ...styles.cardTitle, color: 'var(--accent-red)' }}>🔌 Captured HTTP Requests</h3>
+                {http.map((req: any, i: number) => (
+                    <div key={i} style={{ padding: '12px 0', borderBottom: i < http.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
+                        <div className="mono" style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent-red)' }}>
+                            {req.request}
+                        </div>
+                        <div className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                            Host: {req.host}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        )}
     </div>
   )
 }
@@ -1214,18 +1273,34 @@ function DroppersTab({ data }: { data: any }) {
         <div style={styles.card}>
             <h3 style={styles.cardTitle}>Hidden Payloads Discovered ({data.payloads?.length ?? 0})</h3>
             {data.payloads?.map((payload: any, i: number) => (
-                <div key={i} style={{ padding: '12px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <div key={i} style={{ 
+                    padding: '12px 16px', 
+                    marginBottom: 8,
+                    borderRadius: 6,
+                    border: payload.is_primary_payload ? '1px solid var(--accent-red)' : '1px solid var(--border-subtle)',
+                    background: payload.is_primary_payload ? 'var(--accent-red-dim)' : 'transparent'
+                }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {payload.is_primary_payload && (
+                            <span style={{ padding: '2px 6px', background: 'var(--accent-red)', color: '#000', fontSize: 10, borderRadius: 4, fontWeight: 800 }}>
+                                ☠️ CONFIRMED TROJAN PAYLOAD
+                            </span>
+                        )}
                         {payload.is_disguised && (
-                            <span style={{ padding: '2px 6px', background: 'var(--accent-red-dim)', color: 'var(--accent-red)', fontSize: 10, borderRadius: 4, fontWeight: 600 }}>
+                            <span style={{ padding: '2px 6px', background: 'rgba(239, 71, 111, 0.3)', color: 'var(--accent-red)', fontSize: 10, borderRadius: 4, fontWeight: 600 }}>
                                 DISGUISED
                             </span>
                         )}
-                        <span className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{payload.source_path}</span>
+                        <span className="mono" style={{ fontWeight: payload.is_primary_payload ? 700 : 600, fontSize: 13, color: payload.is_primary_payload ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                            {payload.source_path}
+                        </span>
                     </div>
                     <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Type: <strong style={{ color: 'var(--text-primary)' }}>{payload.file_type}</strong></span>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Size: <strong style={{ color: 'var(--text-primary)' }}>{payload.size_kb} KB</strong></span>
+                        {payload.entropy && (
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Entropy: <strong style={{ color: payload.entropy > 7.5 ? 'var(--accent-orange)' : 'var(--text-primary)' }}>{payload.entropy.toFixed(2)}</strong></span>
+                        )}
                     </div>
                 </div>
             ))}
@@ -1254,7 +1329,7 @@ function CertificateTab({ data }: { data: any }) {
   return (
     <div style={styles.gridTwo}>
       <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Developer Identity</h3>
+        <h3 style={styles.cardTitle}>Certificate Subject</h3>
         <InfoRow label="Common Name" value={subject.common_name} />
         <InfoRow label="Organization" value={subject.organization} />
         <InfoRow label="Country" value={subject.country} />
