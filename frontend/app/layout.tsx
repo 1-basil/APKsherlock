@@ -2,7 +2,7 @@ import './globals.css'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'ForensicDroid – APK Forensic Analysis Platform',
+  title: 'SherlockAPK – APK Forensic Analysis Platform',
   description: 'Professional APK forensic analysis with static analysis, IOC extraction, threat scoring, and investigation reporting.',
 }
 
